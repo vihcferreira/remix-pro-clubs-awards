@@ -3,7 +3,9 @@ import path from 'path';
 import { DatabaseSync } from 'node:sqlite';
 import {
   DEFAULT_QUESTIONS,
+  PLAYERS,
   type ActiveSessionDraft,
+  type PlayerProfile,
   type QuestionType,
   type VoteRecord,
   type VotingQuestion,
@@ -11,6 +13,12 @@ import {
 
 export interface AwardsRepository {
   getResetNonce(): string;
+  getPlayers(): PlayerProfile[];
+  getPlayerById(id: string): PlayerProfile | undefined;
+  createPlayer(player: PlayerProfile): PlayerProfile;
+  updatePlayer(player: PlayerProfile): PlayerProfile;
+  deletePlayer(id: string): PlayerProfile | undefined;
+  resetDefaultPlayers(): PlayerProfile[];
   getQuestions(): VotingQuestion[];
   getQuestionById(id: string): VotingQuestion | undefined;
   createQuestion(question: VotingQuestion): VotingQuestion;
@@ -31,6 +39,19 @@ export interface AwardsRepository {
   upsertSession(session: ActiveSessionDraft): ActiveSessionDraft;
   getActiveSessionsCount(): number;
   close(): void;
+}
+
+interface PlayerRow {
+  id: string;
+  name: string;
+  gamertag: string;
+  archetype: string;
+  level: number;
+  total_stats: number;
+  stats_summary: string;
+  image_url: string;
+  nationality: string;
+  sort_order: number;
 }
 
 interface QuestionRow {
@@ -62,6 +83,20 @@ interface SessionRow {
   draft_answers_json: string;
   created_at: string;
   updated_at: string;
+}
+
+function mapPlayerRow(row: PlayerRow): PlayerProfile {
+  return {
+    id: row.id,
+    name: row.name,
+    gamertag: row.gamertag,
+    archetype: row.archetype,
+    level: Number(row.level),
+    totalStats: Number(row.total_stats),
+    statsSummary: row.stats_summary,
+    imageUrl: row.image_url,
+    nationality: row.nationality || 'BR',
+  };
 }
 
 function mapQuestionRow(row: QuestionRow): VotingQuestion {
@@ -141,6 +176,19 @@ export function createAwardsDatabase(dbPath: string): AwardsRepository {
       value TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS players (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      gamertag TEXT NOT NULL,
+      archetype TEXT NOT NULL,
+      level INTEGER NOT NULL DEFAULT 100,
+      total_stats INTEGER NOT NULL DEFAULT 360,
+      stats_summary TEXT NOT NULL DEFAULT '',
+      image_url TEXT NOT NULL,
+      nationality TEXT NOT NULL DEFAULT 'BR',
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+
     CREATE TABLE IF NOT EXISTS questions (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -184,6 +232,38 @@ export function createAwardsDatabase(dbPath: string): AwardsRepository {
     db.prepare('INSERT INTO metadata (key, value) VALUES (?, ?)').run('resetNonce', 'v1');
   }
 
+  // Seed default players if table is empty
+  const playerCountRow = db.prepare('SELECT COUNT(*) as cnt FROM players').get() as {
+    cnt: number;
+  };
+  if (Number(playerCountRow.cnt) === 0) {
+    const insertP = db.prepare(`
+      INSERT INTO players (id, name, gamertag, archetype, level, total_stats, stats_summary, image_url, nationality, sort_order)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    db.exec('BEGIN');
+    try {
+      PLAYERS.forEach((p, idx) => {
+        insertP.run(
+          p.id,
+          p.name,
+          p.gamertag,
+          p.archetype,
+          p.level,
+          p.totalStats,
+          p.statsSummary,
+          p.imageUrl,
+          p.nationality || 'BR',
+          idx + 1
+        );
+      });
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   // Seed default questions if table is empty
   const countRow = db.prepare('SELECT COUNT(*) as cnt FROM questions').get() as { cnt: number };
   if (Number(countRow.cnt) === 0) {
@@ -218,6 +298,100 @@ export function createAwardsDatabase(dbPath: string): AwardsRepository {
         .prepare('SELECT value FROM metadata WHERE key = ?')
         .get('resetNonce') as { value: string } | undefined;
       return row?.value || 'v1';
+    },
+
+    getPlayers(): PlayerProfile[] {
+      const rows = db
+        .prepare('SELECT * FROM players ORDER BY sort_order ASC, name ASC')
+        .all() as unknown as PlayerRow[];
+      return rows.map(mapPlayerRow);
+    },
+
+    getPlayerById(id: string): PlayerProfile | undefined {
+      const row = db
+        .prepare('SELECT * FROM players WHERE id = ?')
+        .get(id) as unknown as PlayerRow | undefined;
+      return row ? mapPlayerRow(row) : undefined;
+    },
+
+    createPlayer(player: PlayerProfile): PlayerProfile {
+      const maxOrderRow = db
+        .prepare('SELECT COALESCE(MAX(sort_order), 0) as max_ord FROM players')
+        .get() as { max_ord: number };
+      const nextOrder = Number(maxOrderRow.max_ord) + 1;
+
+      db.prepare(`
+        INSERT INTO players (id, name, gamertag, archetype, level, total_stats, stats_summary, image_url, nationality, sort_order)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        player.id,
+        player.name,
+        player.gamertag,
+        player.archetype,
+        player.level,
+        player.totalStats,
+        player.statsSummary,
+        player.imageUrl,
+        player.nationality || 'BR',
+        nextOrder
+      );
+      return player;
+    },
+
+    updatePlayer(player: PlayerProfile): PlayerProfile {
+      db.prepare(`
+        UPDATE players
+        SET name = ?, gamertag = ?, archetype = ?, level = ?, total_stats = ?, stats_summary = ?, image_url = ?, nationality = ?
+        WHERE id = ?
+      `).run(
+        player.name,
+        player.gamertag,
+        player.archetype,
+        player.level,
+        player.totalStats,
+        player.statsSummary,
+        player.imageUrl,
+        player.nationality || 'BR',
+        player.id
+      );
+      return player;
+    },
+
+    deletePlayer(id: string): PlayerProfile | undefined {
+      const existing = this.getPlayerById(id);
+      if (!existing) return undefined;
+      db.prepare('DELETE FROM players WHERE id = ?').run(id);
+      return existing;
+    },
+
+    resetDefaultPlayers(): PlayerProfile[] {
+      const insertP = db.prepare(`
+        INSERT INTO players (id, name, gamertag, archetype, level, total_stats, stats_summary, image_url, nationality, sort_order)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      db.exec('BEGIN');
+      try {
+        db.prepare('DELETE FROM players').run();
+        PLAYERS.forEach((p, idx) => {
+          insertP.run(
+            p.id,
+            p.name,
+            p.gamertag,
+            p.archetype,
+            p.level,
+            p.totalStats,
+            p.statsSummary,
+            p.imageUrl,
+            p.nationality || 'BR',
+            idx + 1
+          );
+        });
+        db.exec('COMMIT');
+      } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+      }
+      return this.getPlayers();
     },
 
     getQuestions(): VotingQuestion[] {

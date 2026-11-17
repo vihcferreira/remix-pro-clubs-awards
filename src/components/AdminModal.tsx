@@ -9,6 +9,8 @@ import {
   AlertTriangle,
   Check,
   Users,
+  UserPlus,
+  Upload,
   FileText,
   BarChart3,
   Image as ImageIcon,
@@ -18,6 +20,7 @@ import {
 } from 'lucide-react';
 import {
   PLAYERS,
+  type PlayerProfile,
   type QuestionType,
   type VoteRecord,
   type VotingQuestion,
@@ -31,6 +34,7 @@ import {
 
 interface DashboardData {
   questions: VotingQuestion[];
+  players?: PlayerProfile[];
   votes: VoteRecord[];
   activeSessionsCount: number;
   tallies: Record<
@@ -54,12 +58,47 @@ interface AdminModalProps {
   onDataChanged: () => void;
 }
 
+function compressImageFileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const maxWidth = 540;
+        const maxHeight = 720;
+        let { width, height } = img;
+        if (width > maxWidth || height > maxHeight) {
+          const ratio = Math.min(maxWidth / width, maxHeight / height);
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(String(reader.result));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.86));
+      };
+      img.onerror = () => reject(new Error('Falha ao processar a imagem selecionada.'));
+      img.src = String(reader.result);
+    };
+    reader.onerror = () => reject(new Error('Falha ao ler o arquivo de imagem.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 export const AdminModal: React.FC<AdminModalProps> = ({
   isOpen,
   onClose,
   onDataChanged,
 }) => {
-  const [activeTab, setActiveTab] = useState<'results' | 'questions' | 'voters'>('results');
+  const [activeTab, setActiveTab] = useState<'results' | 'squad' | 'questions' | 'voters'>(
+    'results'
+  );
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{
@@ -68,7 +107,9 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   } | null>(null);
 
   // Admin authentication state
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => Boolean(getStoredAdminToken()));
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() =>
+    Boolean(getStoredAdminToken())
+  );
   const [passwordInput, setPasswordInput] = useState<string>('');
   const [authLoading, setAuthLoading] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -91,6 +132,24 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const [formShowPhotos, setFormShowPhotos] = useState(false);
   const [formRequired, setFormRequired] = useState(true);
   const [savingQuestion, setSavingQuestion] = useState(false);
+
+  // Squad Player CRUD state
+  const [editingPlayer, setEditingPlayer] = useState<PlayerProfile | null>(null);
+  const [isCreatingPlayer, setIsCreatingPlayer] = useState(false);
+  const [playerToDelete, setPlayerToDelete] = useState<PlayerProfile | null>(null);
+  const [confirmRestorePlayers, setConfirmRestorePlayers] = useState(false);
+
+  // Form fields for create/edit player
+  const [playerName, setPlayerName] = useState('');
+  const [playerGamertag, setPlayerGamertag] = useState('');
+  const [playerArchetype, setPlayerArchetype] = useState('HUNTER');
+  const [playerLevel, setPlayerLevel] = useState<number>(100);
+  const [playerTotalStats, setPlayerTotalStats] = useState<number>(375);
+  const [playerStatsSummary, setPlayerStatsSummary] = useState('REA 92 · FRI 94 · FIN 95 · VOL 94');
+  const [playerNationality, setPlayerNationality] = useState('BR');
+  const [playerImageUrl, setPlayerImageUrl] = useState('');
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [savingPlayer, setSavingPlayer] = useState(false);
 
   const handleLogout = useCallback(() => {
     setStoredAdminToken(null);
@@ -180,6 +239,184 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     }
   };
 
+  // ==========================================================================
+  // SQUAD PLAYERS HANDLERS
+  // ==========================================================================
+  const openCreatePlayerForm = () => {
+    setEditingPlayer(null);
+    setIsCreatingPlayer(true);
+    setPlayerName('');
+    setPlayerGamertag('');
+    setPlayerArchetype('HUNTER');
+    setPlayerLevel(100);
+    setPlayerTotalStats(375);
+    setPlayerStatsSummary('REA 92 · FRI 94 · FIN 95 · VOL 94');
+    setPlayerNationality('BR');
+    setPlayerImageUrl('');
+    setStatusMessage(null);
+  };
+
+  const openEditPlayerForm = (p: PlayerProfile) => {
+    setIsCreatingPlayer(false);
+    setEditingPlayer(p);
+    setPlayerName(p.name);
+    setPlayerGamertag(p.gamertag);
+    setPlayerArchetype(p.archetype);
+    setPlayerLevel(p.level);
+    setPlayerTotalStats(p.totalStats);
+    setPlayerStatsSummary(p.statsSummary);
+    setPlayerNationality(p.nationality || 'BR');
+    setPlayerImageUrl(p.imageUrl);
+    setStatusMessage(null);
+  };
+
+  const closePlayerForm = () => {
+    setIsCreatingPlayer(false);
+    setEditingPlayer(null);
+  };
+
+  const handlePhotoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setStatusMessage({
+        type: 'error',
+        text: 'Selecione um arquivo de imagem válido (JPG, PNG ou WebP).',
+      });
+      return;
+    }
+
+    setUploadingPhoto(true);
+    setStatusMessage(null);
+    try {
+      const dataUrl = await compressImageFileToDataUrl(file);
+      setPlayerImageUrl(dataUrl);
+    } catch {
+      setStatusMessage({
+        type: 'error',
+        text: 'Não foi possível processar a foto selecionada.',
+      });
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handleSavePlayer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!playerName.trim()) {
+      setStatusMessage({ type: 'error', text: 'Informe o nome do integrante.' });
+      return;
+    }
+    if (!playerImageUrl.trim()) {
+      setStatusMessage({
+        type: 'error',
+        text: 'Envie uma foto da carta do integrante ou informe a URL da imagem.',
+      });
+      return;
+    }
+
+    setSavingPlayer(true);
+    try {
+      const payload = {
+        name: playerName.trim(),
+        gamertag: playerGamertag.trim() || playerName.trim(),
+        archetype: playerArchetype.trim().toUpperCase() || 'HUNTER',
+        level: Number(playerLevel) || 100,
+        totalStats: Number(playerTotalStats) || 370,
+        statsSummary: playerStatsSummary.trim() || 'FIN 90 · VIS 90 · DRI 90 · VEL 90',
+        nationality: playerNationality.trim().toUpperCase() || 'BR',
+        imageUrl: playerImageUrl.trim(),
+      };
+
+      const url = editingPlayer
+        ? `/api/admin/players/${encodeURIComponent(editingPlayer.id)}`
+        : '/api/admin/players';
+      const method = editingPlayer ? 'PUT' : 'POST';
+
+      const res = await adminFetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.status === 401) {
+        handleLogout();
+        setAuthError('Sessão expirada. Faça login novamente.');
+        return;
+      }
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Erro ao salvar integrante.' }));
+        setStatusMessage({ type: 'error', text: err.error || 'Erro ao salvar integrante.' });
+        return;
+      }
+
+      setStatusMessage({
+        type: 'success',
+        text: editingPlayer
+          ? `Dados de "${playerName.trim()}" atualizados com sucesso.`
+          : `Novo integrante "${playerName.trim()}" adicionado ao elenco!`,
+      });
+      closePlayerForm();
+      await fetchDashboard();
+      onDataChanged();
+    } catch {
+      setStatusMessage({ type: 'error', text: 'Falha de comunicação ao salvar o integrante.' });
+    } finally {
+      setSavingPlayer(false);
+    }
+  };
+
+  const handleDeletePlayer = async (p: PlayerProfile) => {
+    try {
+      const res = await adminFetch(`/api/admin/players/${encodeURIComponent(p.id)}`, {
+        method: 'DELETE',
+      });
+      if (res.status === 401) {
+        handleLogout();
+        return;
+      }
+      if (res.ok) {
+        setStatusMessage({
+          type: 'success',
+          text: `Integrante "${p.name}" removido do elenco.`,
+        });
+        setPlayerToDelete(null);
+        await fetchDashboard();
+        onDataChanged();
+      } else {
+        const err = await res.json().catch(() => ({ error: 'Erro ao remover integrante.' }));
+        setStatusMessage({ type: 'error', text: err.error || 'Erro ao remover integrante.' });
+      }
+    } catch {
+      setStatusMessage({ type: 'error', text: 'Erro de conexão ao remover integrante.' });
+    }
+  };
+
+  const handleRestoreDefaultPlayers = async () => {
+    try {
+      const res = await adminFetch('/api/admin/players/reset', { method: 'POST' });
+      if (res.status === 401) {
+        handleLogout();
+        return;
+      }
+      if (res.ok) {
+        setStatusMessage({
+          type: 'success',
+          text: 'Elenco original de 6 jogadores restaurado com sucesso.',
+        });
+        setConfirmRestorePlayers(false);
+        await fetchDashboard();
+        onDataChanged();
+      }
+    } catch {
+      setStatusMessage({ type: 'error', text: 'Falha ao restaurar elenco padrão.' });
+    }
+  };
+
+  // ==========================================================================
+  // QUESTIONS HANDLERS
+  // ==========================================================================
   const openCreateForm = () => {
     setEditingQuestion(null);
     setIsCreatingQuestion(true);
@@ -338,6 +575,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     }
   };
 
+  const activePlayers = data?.players && data.players.length > 0 ? data.players : PLAYERS;
   const totalVotesCount = data?.votes.length || 0;
   const squadVotesCount = data?.votes.filter((v) => v.voterProfile !== 'Outro').length || 0;
   const publicVotesCount = data?.votes.filter((v) => v.voterProfile === 'Outro').length || 0;
@@ -552,6 +790,19 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
           <button
             type="button"
+            onClick={() => setActiveTab('squad')}
+            className={`min-h-[42px] px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 ${
+              activeTab === 'squad'
+                ? 'bg-amber-500 text-slate-950'
+                : 'bg-white/5 text-slate-300 hover:bg-white/10'
+            }`}
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>Elenco ({activePlayers.length})</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab('questions')}
             className={`min-h-[42px] px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 ${
               activeTab === 'questions'
@@ -639,7 +890,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                   }
 
                   // Choice question ranking
-                  const rankedPlayers = [...PLAYERS].sort((a, b) => {
+                  const rankedPlayers = [...activePlayers].sort((a, b) => {
                     const countA = tally?.byCandidate[a.id]?.total || 0;
                     const countB = tally?.byCandidate[b.id]?.total || 0;
                     return countB - countA;
@@ -751,7 +1002,361 @@ export const AdminModal: React.FC<AdminModalProps> = ({
             </div>
           )}
 
-          {/* TAB 2: MANAGE QUESTIONS (CREATE, EDIT, DELETE) */}
+          {/* TAB 2: MANAGE SQUAD MEMBERS (ELENCO) */}
+          {activeTab === 'squad' && data && (
+            <div className="space-y-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-semibold text-white">
+                    Gerenciar Integrantes do Elenco
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Adicione novos jogadores com foto da carta oficial, arquétipo e atributos para
+                    aparecerem nos perfis e nas categorias de votação.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmRestorePlayers(true)}
+                    className="min-h-[42px] px-3.5 py-2 rounded-xl bg-white/5 border border-white/10 text-slate-300 hover:bg-white/10 text-xs font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Restaurar Elenco Padrão</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={openCreatePlayerForm}
+                    className="min-h-[42px] px-4 py-2 rounded-xl bg-amber-500 text-slate-950 hover:bg-amber-400 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    <span>Novo Integrante</span>
+                  </button>
+                </div>
+              </div>
+
+              {confirmRestorePlayers && (
+                <div className="rounded-2xl bg-amber-500/10 border border-amber-500/30 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <p className="text-xs text-amber-200">
+                    Deseja restaurar a lista original com os 6 integrantes padrão do elenco?
+                  </p>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmRestorePlayers(false)}
+                      className="min-h-[38px] px-3 py-1.5 rounded-lg bg-white/10 text-xs text-slate-200"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleRestoreDefaultPlayers}
+                      className="min-h-[38px] px-3 py-1.5 rounded-lg bg-amber-500 text-slate-950 text-xs font-semibold"
+                    >
+                      Confirmar Restauração
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Create / Edit Player Form Box */}
+              {(isCreatingPlayer || editingPlayer) && (
+                <form
+                  onSubmit={handleSavePlayer}
+                  className="rounded-2xl bg-[#151C28] border border-amber-500/40 p-5 space-y-5"
+                >
+                  <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                    <h4 className="font-display text-lg font-bold text-white">
+                      {editingPlayer
+                        ? `Editar Integrante: ${editingPlayer.name}`
+                        : 'Adicionar Novo Integrante ao Elenco'}
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={closePlayerForm}
+                      className="text-xs text-slate-400 hover:text-white"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    {/* Left Column: Live Card Preview & Photo Upload */}
+                    <div className="flex flex-col items-center justify-start space-y-3 bg-[#0B0F17] border border-white/10 rounded-2xl p-4">
+                      <span className="text-[11px] font-mono uppercase tracking-wider text-amber-400">
+                        Prévia da Carta Oficial
+                      </span>
+
+                      <div className="w-40 aspect-[3/4] rounded-2xl overflow-hidden bg-slate-950 border border-amber-500/30 flex items-center justify-center relative shadow-lg">
+                        {playerImageUrl ? (
+                          <img
+                            src={playerImageUrl}
+                            alt={playerName || 'Prévia'}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-contain p-1"
+                          />
+                        ) : (
+                          <div className="text-center p-4 text-slate-500">
+                            <ImageIcon className="w-8 h-8 mx-auto mb-1.5 opacity-60" />
+                            <span className="text-[11px] block">Sem foto selecionada</span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="text-center">
+                        <p className="font-display text-lg font-bold text-white">
+                          {playerName || 'Nome do Jogador'}
+                        </p>
+                        <p className="text-[11px] font-mono text-slate-400">
+                          Nível {playerLevel} · {playerArchetype || 'HUNTER'} · TOT{' '}
+                          {playerTotalStats}
+                        </p>
+                      </div>
+
+                      <label className="w-full min-h-[42px] px-3.5 py-2 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 hover:bg-amber-500/25 text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-colors">
+                        <Upload className="w-4 h-4" />
+                        <span>
+                          {uploadingPhoto
+                            ? 'Processando foto...'
+                            : 'Enviar Foto / Carta do Dispositivo'}
+                        </span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handlePhotoFileChange}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+
+                    {/* Right 2 Columns: Player Attributes */}
+                    <div className="lg:col-span-2 space-y-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                            Nome do Integrante *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            disabled={Boolean(editingPlayer)}
+                            value={playerName}
+                            onChange={(e) => setPlayerName(e.target.value)}
+                            placeholder="Ex: Gabriel"
+                            className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0B0F17] border border-white/15 text-sm text-white disabled:opacity-60 focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                            Gamertag / ID Online *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={playerGamertag}
+                            onChange={(e) => setPlayerGamertag(e.target.value)}
+                            placeholder="Ex: GabrielPro10"
+                            className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0B0F17] border border-white/15 text-sm text-white focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div>
+                          <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                            Arquétipo da Carta
+                          </label>
+                          <input
+                            type="text"
+                            value={playerArchetype}
+                            onChange={(e) => setPlayerArchetype(e.target.value)}
+                            placeholder="Ex: HUNTER, CREATOR+, SPARK+"
+                            className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0B0F17] border border-white/15 text-sm text-white focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                            Nível (Level)
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={999}
+                            value={playerLevel}
+                            onChange={(e) => setPlayerLevel(Number(e.target.value))}
+                            className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0B0F17] border border-white/15 text-sm text-white focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                            Total de Stats (TOT)
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={9999}
+                            value={playerTotalStats}
+                            onChange={(e) => setPlayerTotalStats(Number(e.target.value))}
+                            className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0B0F17] border border-white/15 text-sm text-white focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div className="sm:col-span-2">
+                          <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                            Resumo de Atributos da Carta
+                          </label>
+                          <input
+                            type="text"
+                            value={playerStatsSummary}
+                            onChange={(e) => setPlayerStatsSummary(e.target.value)}
+                            placeholder="Ex: REA 92 · FRI 94 · FIN 95 · VOL 94"
+                            className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0B0F17] border border-white/15 text-sm text-white focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                            Nacionalidade (Sigla)
+                          </label>
+                          <input
+                            type="text"
+                            maxLength={4}
+                            value={playerNationality}
+                            onChange={(e) => setPlayerNationality(e.target.value)}
+                            placeholder="BR"
+                            className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0B0F17] border border-white/15 text-sm text-white focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                          URL da Foto / Carta (preenchido automaticamente no upload ou cole um link) *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={playerImageUrl}
+                          onChange={(e) => setPlayerImageUrl(e.target.value)}
+                          placeholder="Envie uma imagem no botão ao lado ou cole https://... ou /cards/..."
+                          className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0B0F17] border border-white/15 text-xs font-mono text-slate-200 focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-end gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={closePlayerForm}
+                          className="min-h-[42px] px-4 py-2 rounded-xl bg-white/5 text-slate-300 hover:bg-white/10 text-xs font-medium"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={savingPlayer || uploadingPhoto}
+                          className="min-h-[42px] px-5 py-2 rounded-xl bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-50 text-xs font-semibold flex items-center gap-1.5"
+                        >
+                          <Check className="w-4 h-4" />
+                          <span>
+                            {savingPlayer
+                              ? 'Salvando...'
+                              : editingPlayer
+                                ? 'Salvar Alterações'
+                                : 'Cadastrar Integrante'}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </form>
+              )}
+
+              {/* Current Squad Members Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                {activePlayers.map((player) => (
+                  <div
+                    key={player.id}
+                    className="rounded-2xl bg-[#151C28] border border-white/10 p-4 flex flex-col justify-between gap-4"
+                  >
+                    <div className="flex items-center gap-3.5">
+                      <img
+                        src={player.imageUrl}
+                        alt={player.name}
+                        referrerPolicy="no-referrer"
+                        className="w-14 h-18 rounded-xl object-cover object-top bg-slate-950 border border-amber-500/30 shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <h4 className="font-display text-xl font-bold text-white truncate">
+                          {player.name}
+                        </h4>
+                        <p className="text-xs font-mono text-slate-400 truncate">
+                          {player.gamertag} · Nível {player.level}
+                        </p>
+                        <p className="text-[11px] font-mono text-amber-400 mt-0.5 truncate">
+                          {player.archetype} · TOT {player.totalStats}
+                        </p>
+                        <p className="text-[11px] font-mono text-slate-500 mt-0.5 truncate">
+                          {player.statsSummary}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/5">
+                      {playerToDelete?.id === player.id ? (
+                        <div className="flex items-center gap-2 bg-red-950/70 border border-red-500/40 rounded-xl p-1.5 w-full justify-between">
+                          <span className="text-xs text-red-200 px-2">Remover {player.name}?</span>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleDeletePlayer(player)}
+                              className="min-h-[32px] px-2.5 rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-500"
+                            >
+                              Sim
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setPlayerToDelete(null)}
+                              className="min-h-[32px] px-2.5 rounded-lg bg-white/10 text-slate-300 text-xs"
+                            >
+                              Não
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => openEditPlayerForm(player)}
+                            className="min-h-[38px] px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-slate-200 hover:bg-white/10 text-xs font-medium flex items-center gap-1.5 transition-colors"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                            <span>Editar</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPlayerToDelete(player)}
+                            className="min-h-[38px] px-3 py-1.5 rounded-xl bg-red-500/10 border border-red-500/25 text-red-300 hover:bg-red-500/20 text-xs font-medium flex items-center gap-1.5 transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Remover</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: MANAGE QUESTIONS (CREATE, EDIT, DELETE) */}
           {activeTab === 'questions' && data && (
             <div className="space-y-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1027,7 +1632,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
             </div>
           )}
 
-          {/* TAB 3: VOTERS & TOKENS LOG */}
+          {/* TAB 4: VOTERS & TOKENS LOG */}
           {activeTab === 'voters' && data && (
             <div className="space-y-4">
               <div>

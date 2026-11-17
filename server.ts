@@ -6,8 +6,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import {
-  PLAYERS,
   type ActiveSessionDraft,
+  type PlayerProfile,
   type VoteRecord,
   type VotingQuestion,
 } from './src/data/awardsData.ts';
@@ -99,6 +99,16 @@ export function verifyAdminToken(token: string, secret: string): boolean {
   }
 }
 
+function isValidImageSource(url: string): boolean {
+  if (!url || url.length > 1_800_000) return false;
+  return (
+    url.startsWith('/cards/') ||
+    url.startsWith('https://') ||
+    url.startsWith('http://') ||
+    /^data:image\/(jpeg|jpg|png|webp|gif);base64,[A-Za-z0-9+/=]+$/i.test(url)
+  );
+}
+
 export interface CreateAppOptions {
   dbPath?: string;
   repository?: AwardsRepository;
@@ -157,7 +167,8 @@ export function createApp(options: CreateAppOptions = {}) {
     next();
   });
 
-  app.use(express.json({ limit: '64kb' }));
+  // 2mb limit supports Base64 compressed card images uploaded by Admin
+  app.use(express.json({ limit: '2mb' }));
 
   // Brute-force tracker per IP for admin login
   const loginAttempts = new Map<string, { count: number; resetAt: number }>();
@@ -242,6 +253,7 @@ export function createApp(options: CreateAppOptions = {}) {
     const existingVote = repo.findVoteByTokenOrIdentity(token, deviceSignature, ipHash);
     const votedProfiles = repo.getVotedSquadProfiles();
     const sortedQuestions = repo.getQuestions();
+    const players = repo.getPlayers();
 
     if (existingVote) {
       res.json({
@@ -251,6 +263,7 @@ export function createApp(options: CreateAppOptions = {}) {
         voteRecord: existingVote,
         draft: null,
         questions: sortedQuestions,
+        players,
         votedProfiles,
       });
       return;
@@ -277,6 +290,7 @@ export function createApp(options: CreateAppOptions = {}) {
       voteRecord: null,
       draft,
       questions: sortedQuestions,
+      players,
       votedProfiles,
     });
   });
@@ -297,6 +311,7 @@ export function createApp(options: CreateAppOptions = {}) {
       return;
     }
 
+    const players = repo.getPlayers();
     const now = new Date().toISOString();
     const current: ActiveSessionDraft = repo.getSession(token) || {
       token,
@@ -313,7 +328,7 @@ export function createApp(options: CreateAppOptions = {}) {
       if (
         profile === null ||
         profile === 'Outro' ||
-        PLAYERS.some((p) => p.id === profile)
+        players.some((p) => p.id === profile)
       ) {
         current.selectedProfile = profile;
       }
@@ -356,7 +371,8 @@ export function createApp(options: CreateAppOptions = {}) {
       return;
     }
 
-    const isSquadMember = PLAYERS.some((p) => p.id === voterProfile);
+    const currentPlayers = repo.getPlayers();
+    const isSquadMember = currentPlayers.some((p) => p.id === voterProfile);
     if (!isSquadMember && voterProfile !== 'Outro') {
       res.status(400).json({ error: 'Perfil de votante inválido.' });
       return;
@@ -403,7 +419,7 @@ export function createApp(options: CreateAppOptions = {}) {
       if (!rawVal) continue;
 
       if (q.type === 'choice') {
-        const isValidCandidate = PLAYERS.some((p) => p.id === rawVal);
+        const isValidCandidate = currentPlayers.some((p) => p.id === rawVal);
         if (!isValidCandidate) {
           res.status(400).json({
             error: `Candidato inválido selecionado na categoria "${q.title}".`,
@@ -448,9 +464,10 @@ export function createApp(options: CreateAppOptions = {}) {
   // PROTECTED ADMIN ROUTES (Require valid Bearer token)
   // ============================================================================
 
-  // Admin Dashboard Data: questions, votes, tallies
+  // Admin Dashboard Data: questions, players, votes, tallies
   app.get('/api/admin/dashboard', requireAdminAuth, (_req: Request, res: Response) => {
     const sortedQuestions = repo.getQuestions();
+    const currentPlayers = repo.getPlayers();
     const votes = repo.getVotes();
 
     const tallies: Record<
@@ -470,7 +487,7 @@ export function createApp(options: CreateAppOptions = {}) {
     for (const q of sortedQuestions) {
       const byCandidate: Record<string, { total: number; squadVotes: number; publicVotes: number }> =
         {};
-      for (const p of PLAYERS) {
+      for (const p of currentPlayers) {
         byCandidate[p.id] = { total: 0, squadVotes: 0, publicVotes: 0 };
       }
 
@@ -517,6 +534,7 @@ export function createApp(options: CreateAppOptions = {}) {
 
     res.json({
       questions: sortedQuestions,
+      players: currentPlayers,
       votes,
       activeSessionsCount: repo.getActiveSessionsCount(),
       tallies,
@@ -532,6 +550,169 @@ export function createApp(options: CreateAppOptions = {}) {
       deletedCount,
       message: 'Todos os dados de votação foram excluídos com sucesso.',
     });
+  });
+
+  // Admin: Create new Squad Member (Player)
+  app.post('/api/admin/players', requireAdminAuth, (req: Request, res: Response) => {
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim().slice(0, 60) : '';
+    const gamertag =
+      typeof req.body?.gamertag === 'string' && req.body.gamertag.trim()
+        ? req.body.gamertag.trim().slice(0, 60)
+        : name;
+    const archetype =
+      typeof req.body?.archetype === 'string' && req.body.archetype.trim()
+        ? req.body.archetype.trim().toUpperCase().slice(0, 40)
+        : 'PRO PLAYER';
+    const levelRaw = Number(req.body?.level);
+    const level = !Number.isNaN(levelRaw) && levelRaw > 0 ? Math.min(999, Math.round(levelRaw)) : 100;
+    const totalStatsRaw = Number(req.body?.totalStats);
+    const totalStats =
+      !Number.isNaN(totalStatsRaw) && totalStatsRaw > 0
+        ? Math.min(9999, Math.round(totalStatsRaw))
+        : 370;
+    const statsSummary =
+      typeof req.body?.statsSummary === 'string' && req.body.statsSummary.trim()
+        ? req.body.statsSummary.trim().slice(0, 120)
+        : 'FIN 90 · VIS 90 · DRI 90 · VEL 90';
+    const nationality =
+      typeof req.body?.nationality === 'string' && req.body.nationality.trim()
+        ? req.body.nationality.trim().toUpperCase().slice(0, 8)
+        : 'BR';
+    const imageUrl = typeof req.body?.imageUrl === 'string' ? req.body.imageUrl.trim() : '';
+
+    if (!name) {
+      res.status(400).json({ error: 'O nome do integrante do elenco é obrigatório.' });
+      return;
+    }
+
+    if (name.toLowerCase() === 'outro') {
+      res.status(400).json({ error: 'O nome "Outro" é reservado para o perfil público.' });
+      return;
+    }
+
+    if (!imageUrl || !isValidImageSource(imageUrl)) {
+      res.status(400).json({
+        error: 'Envie uma foto válida da carta (upload de imagem ou URL válida).',
+      });
+      return;
+    }
+
+    // Use name as ID (matching existing pattern: 'Pedrin', 'Pedrão', etc.)
+    const id = name;
+    if (repo.getPlayerById(id)) {
+      res.status(409).json({
+        error: `Já existe um integrante cadastrado com o nome "${name}".`,
+      });
+      return;
+    }
+
+    const newPlayer: PlayerProfile = {
+      id,
+      name,
+      gamertag,
+      archetype,
+      level,
+      totalStats,
+      statsSummary,
+      imageUrl,
+      nationality,
+    };
+
+    repo.createPlayer(newPlayer);
+    res.status(201).json({ ok: true, player: newPlayer });
+  });
+
+  // Admin: Edit existing Squad Member (Player)
+  app.put('/api/admin/players/:id', requireAdminAuth, (req: Request, res: Response) => {
+    const { id } = req.params;
+    const existing = repo.getPlayerById(id);
+    if (!existing) {
+      res.status(404).json({ error: 'Integrante não encontrado no elenco.' });
+      return;
+    }
+
+    const name =
+      typeof req.body?.name === 'string' && req.body.name.trim()
+        ? req.body.name.trim().slice(0, 60)
+        : existing.name;
+    const gamertag =
+      typeof req.body?.gamertag === 'string' && req.body.gamertag.trim()
+        ? req.body.gamertag.trim().slice(0, 60)
+        : existing.gamertag;
+    const archetype =
+      typeof req.body?.archetype === 'string' && req.body.archetype.trim()
+        ? req.body.archetype.trim().toUpperCase().slice(0, 40)
+        : existing.archetype;
+    const levelRaw = Number(req.body?.level);
+    const level =
+      req.body?.level !== undefined && !Number.isNaN(levelRaw) && levelRaw > 0
+        ? Math.min(999, Math.round(levelRaw))
+        : existing.level;
+    const totalStatsRaw = Number(req.body?.totalStats);
+    const totalStats =
+      req.body?.totalStats !== undefined && !Number.isNaN(totalStatsRaw) && totalStatsRaw > 0
+        ? Math.min(9999, Math.round(totalStatsRaw))
+        : existing.totalStats;
+    const statsSummary =
+      typeof req.body?.statsSummary === 'string' && req.body.statsSummary.trim()
+        ? req.body.statsSummary.trim().slice(0, 120)
+        : existing.statsSummary;
+    const nationality =
+      typeof req.body?.nationality === 'string' && req.body.nationality.trim()
+        ? req.body.nationality.trim().toUpperCase().slice(0, 8)
+        : existing.nationality;
+    const imageUrl =
+      typeof req.body?.imageUrl === 'string' && req.body.imageUrl.trim()
+        ? req.body.imageUrl.trim()
+        : existing.imageUrl;
+
+    if (!isValidImageSource(imageUrl)) {
+      res.status(400).json({
+        error: 'A foto informada para a carta não é válida.',
+      });
+      return;
+    }
+
+    const updated: PlayerProfile = {
+      ...existing,
+      name,
+      gamertag,
+      archetype,
+      level,
+      totalStats,
+      statsSummary,
+      imageUrl,
+      nationality,
+    };
+
+    repo.updatePlayer(updated);
+    res.json({ ok: true, player: updated });
+  });
+
+  // Admin: Delete Squad Member (Player)
+  app.delete('/api/admin/players/:id', requireAdminAuth, (req: Request, res: Response) => {
+    const { id } = req.params;
+    const currentPlayers = repo.getPlayers();
+    if (currentPlayers.length <= 2) {
+      res.status(400).json({
+        error: 'O elenco deve manter pelo menos 2 integrantes para a votação.',
+      });
+      return;
+    }
+
+    const removed = repo.deletePlayer(id);
+    if (!removed) {
+      res.status(404).json({ error: 'Integrante não encontrado no elenco.' });
+      return;
+    }
+
+    res.json({ ok: true, removed });
+  });
+
+  // Admin: Restore default squad members
+  app.post('/api/admin/players/reset', requireAdminAuth, (_req: Request, res: Response) => {
+    const players = repo.resetDefaultPlayers();
+    res.json({ ok: true, players });
   });
 
   // Admin: Create new question

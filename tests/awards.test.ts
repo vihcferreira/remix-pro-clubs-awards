@@ -340,6 +340,42 @@ describe('3. Testes de Integração da API — Autenticação Admin, Regras de V
       { headers: authHeaders }
     );
     assert.equal(delRes.status, 200);
+
+    // Adiciona um novo integrante ao elenco com foto em Base64
+    const sampleBase64Photo =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const addPlayerRes = await simulateRequest(app, 'POST', '/api/admin/players', {
+      headers: authHeaders,
+      body: JSON.stringify({
+        name: 'Gabriel',
+        gamertag: 'GabrielPro99',
+        archetype: 'FINISHER+',
+        level: 100,
+        totalStats: 388,
+        statsSummary: 'FIN 99 · CHL 95 · FRI 97 · VEL 97',
+        nationality: 'BR',
+        imageUrl: sampleBase64Photo,
+      }),
+    });
+    assert.equal(addPlayerRes.status, 201);
+    const addedPlayer = await addPlayerRes.json<{ player: { id: string; imageUrl: string } }>();
+    assert.equal(addedPlayer.player.id, 'Gabriel');
+    assert.equal(addedPlayer.player.imageUrl, sampleBase64Photo);
+
+    // Verifica que o novo integrante aparece na inicialização de sessão
+    const initRes = await simulateRequest(app, 'POST', '/api/session/init', {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceSignature: 'DEV-CHECK-PLAYERS' }),
+    });
+    assert.equal(initRes.status, 200);
+    const initData = await initRes.json<{ players: Array<{ id: string }> }>();
+    assert.equal(initData.players.some((p) => p.id === 'Gabriel'), true);
+
+    // Remove o integrante adicionado no teste
+    const delPlayerRes = await simulateRequest(app, 'DELETE', '/api/admin/players/Gabriel', {
+      headers: authHeaders,
+    });
+    assert.equal(delPlayerRes.status, 200);
   });
 
   it('valida regras de votação: bloqueia auto-voto, candidato inválido, voto duplicado e perfil já usado', async () => {

@@ -40,6 +40,7 @@ interface SessionInitResponse {
     draftAnswers: Record<string, string>;
   } | null;
   questions: VotingQuestion[];
+  players?: PlayerProfile[];
   votedProfiles: string[];
 }
 
@@ -51,6 +52,7 @@ export default function App() {
   const [alreadyVoted, setAlreadyVoted] = useState<boolean>(false);
   const [voteRecord, setVoteRecord] = useState<VoteRecord | null>(null);
   const [questions, setQuestions] = useState<VotingQuestion[]>([]);
+  const [players, setPlayers] = useState<PlayerProfile[]>(PLAYERS);
   const [votedProfiles, setVotedProfiles] = useState<string[]>([]);
 
   // Voting Flow State
@@ -83,6 +85,9 @@ export default function App() {
       setToken(data.token);
       setIpHash(data.ipHash);
       setQuestions(data.questions);
+      if (Array.isArray(data.players) && data.players.length > 0) {
+        setPlayers(data.players);
+      }
       setVotedProfiles(data.votedProfiles || []);
 
       if (data.alreadyVoted && data.voteRecord) {
@@ -303,7 +308,7 @@ export default function App() {
               do boneco:
             </p>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5 sm:gap-4">
-              {PLAYERS.map((player) => {
+              {players.map((player) => {
                 const isSelf = selectedProfile !== 'Outro' && selectedProfile === player.id;
                 const isSelected = currentAnswer === player.id;
 
@@ -410,7 +415,7 @@ export default function App() {
         {/* Question Body: Choice Standard (Compact Touch Rows/Cards) */}
         {q.type === 'choice' && !q.showPhotos && (
           <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {PLAYERS.map((player) => {
+            {players.map((player) => {
               const isSelf = selectedProfile !== 'Outro' && selectedProfile === player.id;
               const isSelected = currentAnswer === player.id;
 
@@ -660,13 +665,13 @@ export default function App() {
               </button>
             </div>
 
-            {/* 6 Squad Participant Profiles */}
+            {/* Squad Participant Profiles */}
             <div>
               <h3 className="text-xs font-mono uppercase tracking-wider text-slate-400 mb-3">
                 Participantes do Elenco (Formulário Completo)
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                {PLAYERS.map((player) => {
+                {players.map((player) => {
                   const hasAlreadyVoted = votedProfiles.includes(player.id);
 
                   return (
@@ -918,7 +923,7 @@ export default function App() {
                   .filter((q) => voteRecord.answers[q.id])
                   .map((q) => {
                     const ans = voteRecord.answers[q.id];
-                    const chosenPlayer = PLAYERS.find((p) => p.id === ans);
+                    const chosenPlayer = players.find((p) => p.id === ans);
 
                     return (
                       <div
