@@ -25,6 +25,7 @@ import {
   type VotingQuestion,
 } from './data/awardsData';
 import { getOrCreateDeviceSignature } from './utils/deviceIdentity';
+import { apiFetch } from './utils/api';
 import { CardLightboxModal } from './components/CardLightboxModal';
 import { AdminModal } from './components/AdminModal';
 
@@ -71,7 +72,7 @@ export default function App() {
 
   const loadSession = useCallback(async () => {
     try {
-      const res = await fetch('/api/session/init', {
+      const res = await apiFetch('/api/session/init', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ deviceSignature }),
@@ -118,7 +119,7 @@ export default function App() {
   const syncDraft = useCallback(
     async (nextProfile: string | null, nextAnswers: Record<string, string>) => {
       try {
-        await fetch('/api/session/draft', {
+        await apiFetch('/api/session/draft', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -219,7 +220,7 @@ export default function App() {
     setSubmitting(true);
     setErrorMessage(null);
     try {
-      const res = await fetch('/api/votes/submit', {
+      const res = await apiFetch('/api/votes/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

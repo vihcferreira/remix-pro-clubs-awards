@@ -1,8 +1,30 @@
+# Dependências
 node_modules/
+bun.lock
+
+# Builds e caches
 build/
 dist/
 coverage/
-.DS_Store
-*.log
-.env*
+*.tsbuildinfo
+.vercel/
+.aistudio/
+
+# Arquivos de ambiente e segredos (NUNCA subir para o GitHub)
+.env
+.env.*
 !.env.example
+
+# Bancos de dados locais e arquivos de sessão/votos (dados sensíveis de usuários)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.sqlite
+data/*.sqlite3
+data/store.json
+
+# Sistema Operacional e Logs
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*

@@ -12,6 +12,9 @@ import {
   FileText,
   BarChart3,
   Image as ImageIcon,
+  Lock,
+  LogOut,
+  KeyRound,
 } from 'lucide-react';
 import {
   PLAYERS,
@@ -19,6 +22,12 @@ import {
   type VoteRecord,
   type VotingQuestion,
 } from '../data/awardsData';
+import {
+  adminFetch,
+  apiFetch,
+  getStoredAdminToken,
+  setStoredAdminToken,
+} from '../utils/api';
 
 interface DashboardData {
   questions: VotingQuestion[];
@@ -58,6 +67,12 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     text: string;
   } | null>(null);
 
+  // Admin authentication state
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => Boolean(getStoredAdminToken()));
+  const [passwordInput, setPasswordInput] = useState<string>('');
+  const [authLoading, setAuthLoading] = useState<boolean>(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+
   // Confirmation modal state for deleting all votes
   const [confirmClearVotes, setConfirmClearVotes] = useState(false);
   const [clearingVotes, setClearingVotes] = useState(false);
@@ -77,13 +92,36 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const [formRequired, setFormRequired] = useState(true);
   const [savingQuestion, setSavingQuestion] = useState(false);
 
+  const handleLogout = useCallback(() => {
+    setStoredAdminToken(null);
+    setIsAuthenticated(false);
+    setData(null);
+    setPasswordInput('');
+    setAuthError(null);
+  }, []);
+
   const fetchDashboard = useCallback(async () => {
+    if (!getStoredAdminToken()) {
+      setIsAuthenticated(false);
+      return;
+    }
     setLoading(true);
     try {
-      const res = await fetch('/api/admin/dashboard');
+      const res = await adminFetch('/api/admin/dashboard');
+      if (res.status === 401) {
+        handleLogout();
+        setAuthError('Sessão expirada ou não autorizada. Digite a senha novamente.');
+        return;
+      }
       if (res.ok) {
         const json = (await res.json()) as DashboardData;
         setData(json);
+        setIsAuthenticated(true);
+      } else {
+        setStatusMessage({
+          type: 'error',
+          text: 'Não foi possível carregar os dados do painel administrativo.',
+        });
       }
     } catch {
       setStatusMessage({
@@ -93,17 +131,54 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [handleLogout]);
 
   useEffect(() => {
     if (isOpen) {
-      fetchDashboard();
       setStatusMessage(null);
       setConfirmClearVotes(false);
+      setAuthError(null);
+      if (getStoredAdminToken()) {
+        fetchDashboard();
+      } else {
+        setIsAuthenticated(false);
+      }
     }
   }, [isOpen, fetchDashboard]);
 
   if (!isOpen) return null;
+
+  const handleLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!passwordInput.trim()) {
+      setAuthError('Digite a senha de administrador.');
+      return;
+    }
+
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      const res = await apiFetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: passwordInput }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.token) {
+        setAuthError(json.error || 'Senha incorreta. Acesso negado.');
+        return;
+      }
+
+      setStoredAdminToken(json.token);
+      setPasswordInput('');
+      setIsAuthenticated(true);
+      await fetchDashboard();
+    } catch {
+      setAuthError('Falha ao conectar ao servidor para validar a senha.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
 
   const openCreateForm = () => {
     setEditingQuestion(null);
@@ -157,11 +232,17 @@ export const AdminModal: React.FC<AdminModalProps> = ({
         : '/api/admin/questions';
       const method = editingQuestion ? 'PUT' : 'POST';
 
-      const res = await fetch(url, {
+      const res = await adminFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+
+      if (res.status === 401) {
+        handleLogout();
+        setAuthError('Sessão expirada. Faça login novamente.');
+        return;
+      }
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Erro ao salvar questão.' }));
@@ -187,9 +268,13 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
   const handleDeleteQuestion = async (q: VotingQuestion) => {
     try {
-      const res = await fetch(`/api/admin/questions/${q.id}`, {
+      const res = await adminFetch(`/api/admin/questions/${q.id}`, {
         method: 'DELETE',
       });
+      if (res.status === 401) {
+        handleLogout();
+        return;
+      }
       if (res.ok) {
         setStatusMessage({
           type: 'success',
@@ -208,7 +293,11 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
   const handleRestoreDefaultQuestions = async () => {
     try {
-      const res = await fetch('/api/admin/questions/reset', { method: 'POST' });
+      const res = await adminFetch('/api/admin/questions/reset', { method: 'POST' });
+      if (res.status === 401) {
+        handleLogout();
+        return;
+      }
       if (res.ok) {
         setStatusMessage({
           type: 'success',
@@ -226,7 +315,11 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const handleClearAllVotes = async () => {
     setClearingVotes(true);
     try {
-      const res = await fetch('/api/admin/votes', { method: 'DELETE' });
+      const res = await adminFetch('/api/admin/votes', { method: 'DELETE' });
+      if (res.status === 401) {
+        handleLogout();
+        return;
+      }
       if (res.ok) {
         setStatusMessage({
           type: 'success',
@@ -248,6 +341,93 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const totalVotesCount = data?.votes.length || 0;
   const squadVotesCount = data?.votes.filter((v) => v.voterProfile !== 'Outro').length || 0;
   const publicVotesCount = data?.votes.filter((v) => v.voterProfile === 'Outro').length || 0;
+
+  if (!isAuthenticated) {
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Autenticação do Painel Administrativo"
+      >
+        <div className="w-full max-w-md rounded-3xl bg-[#0F1521] border border-white/10 shadow-2xl overflow-hidden">
+          <div className="flex items-center justify-between gap-4 px-5 py-4 border-b border-white/10 bg-[#151C28]">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center shrink-0">
+                <Lock className="w-4 h-4" />
+              </div>
+              <div>
+                <h2 className="font-display text-xl font-bold tracking-wide text-white">
+                  Acesso Restrito ao Admin
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Digite a senha do organizador para continuar
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white transition-colors"
+              aria-label="Fechar Login Admin"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <form onSubmit={handleLoginSubmit} className="p-6 space-y-4">
+            {authError && (
+              <div className="rounded-xl bg-red-950/70 border border-red-500/40 p-3 text-xs text-red-200 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                <span>{authError}</span>
+              </div>
+            )}
+
+            <div>
+              <label
+                htmlFor="admin-password-input"
+                className="block text-xs font-medium text-slate-300 mb-1.5"
+              >
+                Senha do Administrador
+              </label>
+              <div className="relative">
+                <KeyRound className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  id="admin-password-input"
+                  type="password"
+                  autoFocus
+                  required
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  placeholder="Digite a senha de acesso..."
+                  className="w-full min-h-[46px] pl-10 pr-4 py-2.5 rounded-xl bg-[#0B0F17] border border-white/15 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-500 transition-colors"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="min-h-[44px] px-4 py-2 rounded-xl bg-white/5 text-slate-300 hover:bg-white/10 text-xs font-medium transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="min-h-[44px] px-5 py-2 rounded-xl bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-50 text-xs font-bold flex items-center gap-2 transition-colors"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>{authLoading ? 'Verificando...' : 'Entrar no Painel'}</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -277,6 +457,16 @@ export const AdminModal: React.FC<AdminModalProps> = ({
             >
               <Trash2 className="w-4 h-4" />
               <span>Excluir Dados de Votação</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="min-h-[44px] px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-slate-300 hover:bg-white/10 hover:text-white text-xs font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+              title="Bloquear Painel Admin"
+            >
+              <LogOut className="w-4 h-4" />
+              <span className="hidden sm:inline">Bloquear</span>
             </button>
 
             <button
