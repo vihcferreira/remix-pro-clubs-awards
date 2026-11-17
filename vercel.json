@@ -15,6 +15,10 @@
   ],
   "rewrites": [
     {
+      "source": "/api/:path*",
+      "destination": "https://remix-pro-clubs-awards.onrender.com/api/:path*"
+    },
+    {
       "source": "/((?!cards/|assets/|.*\\..*).*)",
       "destination": "/index.html"
     }

@@ -2,6 +2,7 @@ import 'dotenv/config';
 import crypto from 'crypto';
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
@@ -845,13 +846,31 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(__dirname, 'dist');
-    app.use(express.static(distPath));
+    const indexPath = path.join(distPath, 'index.html');
+    const hasDistBuild = fs.existsSync(indexPath);
+
+    if (hasDistBuild) {
+      app.use(express.static(distPath));
+    }
+
     app.get('*', (req: Request, res: Response) => {
       if (req.path.startsWith('/api/')) {
         res.status(404).json({ error: 'Endpoint não encontrado.' });
         return;
       }
-      res.sendFile(path.join(distPath, 'index.html'));
+
+      if (hasDistBuild) {
+        res.sendFile(indexPath);
+      } else {
+        res.json({
+          service: 'Pro Clubs Awards API',
+          status: 'online',
+          message:
+            'O backend e o banco SQLite estão operacionais. O frontend desta aplicação está hospedado na Vercel.',
+          healthcheck: '/api/health',
+          timestamp: new Date().toISOString(),
+        });
+      }
     });
   }
 
