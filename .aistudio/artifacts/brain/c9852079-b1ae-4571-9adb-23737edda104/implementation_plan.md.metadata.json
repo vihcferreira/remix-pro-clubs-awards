@@ -1,0 +1,6 @@
+{
+  "summary": "Plano de implementação atualizado com geração automática de token único por usuário (IP + identificador fixo de dispositivo/navegador mantido até a conclusão do voto), botão de exclusão de todos os dados de votação com modal de confirmação no Painel Admin, e gerenciamento completo (criação, edição e exclusão) das questões de votação.",
+  "updatedAt": "2026-11-17T14:39:52.438843769Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

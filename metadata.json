@@ -1,0 +1,8 @@
+{
+  "name": "Remix Pro Clubs Awards",
+  "description": "Plataforma interativa de votação mobile-first do Pro Clubs Awards com seleção de perfil, exibição das cartas oficiais do elenco, validação de voto único por acesso e painel administrativo.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
