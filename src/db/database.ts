@@ -179,12 +179,45 @@ function mapSessionRow(row: SessionRow): ActiveSessionDraft {
 // ============================================================================
 // POSTGRESQL REPOSITORY (SUPABASE)
 // ============================================================================
+export function sanitizeDatabaseUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim();
+  const protoMatch = trimmed.match(/^(postgres(?:ql)?:\/\/)(.+)$/i);
+  if (!protoMatch) return trimmed;
+
+  const [, protocol, rest] = protoMatch;
+  const lastAtIndex = rest.lastIndexOf('@');
+  if (lastAtIndex === -1) return trimmed;
+
+  const credentials = rest.slice(0, lastAtIndex);
+  const hostAndPath = rest.slice(lastAtIndex + 1);
+  const colonIndex = credentials.indexOf(':');
+  if (colonIndex === -1) return trimmed;
+
+  const username = credentials.slice(0, colonIndex);
+  let rawPassword = credentials.slice(colonIndex + 1);
+
+  // Remove accidental surrounding brackets [password] from Supabase template
+  if (rawPassword.startsWith('[') && rawPassword.endsWith(']') && rawPassword.length > 2) {
+    rawPassword = rawPassword.slice(1, -1);
+  }
+
+  try {
+    rawPassword = decodeURIComponent(rawPassword);
+  } catch {
+    // keep rawPassword if not valid URI component
+  }
+
+  const encodedPassword = encodeURIComponent(rawPassword);
+  return `${protocol}${username}:${encodedPassword}@${hostAndPath}`;
+}
+
 export class PostgresAwardsRepository implements AwardsRepository {
   private pool: pg.Pool;
 
   constructor(connectionString: string) {
+    const cleanUrl = sanitizeDatabaseUrl(connectionString);
     this.pool = new pg.Pool({
-      connectionString,
+      connectionString: cleanUrl,
       ssl: {
         rejectUnauthorized: false,
       },

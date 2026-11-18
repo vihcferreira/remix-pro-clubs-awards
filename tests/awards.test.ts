@@ -16,7 +16,7 @@ import {
   verifyPasswordConstantTime,
 } from '../server.ts';
 import { DEFAULT_QUESTIONS, PLAYERS } from '../src/data/awardsData.ts';
-import { SqliteAwardsRepository } from '../src/db/database.ts';
+import { sanitizeDatabaseUrl, SqliteAwardsRepository } from '../src/db/database.ts';
 
 interface SimulatedResponse {
   status: number;
@@ -164,6 +164,19 @@ describe('1. Testes Unitários — Segurança, Senha e Tokens', () => {
     assert.equal(id1.ipHash, id2.ipHash);
     assert.match(id1.token, /^PCA-[A-F0-9]{4}-[A-F0-9]{4}$/);
     assert.notEqual(id1.token, idDiffIp.token);
+  });
+
+  it('codifica automaticamente caracteres especiais (@, #, colchetes) na senha do DATABASE_URL do Supabase', () => {
+    const rawWithSpecialChars =
+      'postgresql://postgres.projid:@TestPass123#@aws-0-us-west-2.pooler.supabase.com:6543/postgres';
+    const rawWithBrackets =
+      'postgresql://postgres.projid:[@TestPass123#]@aws-0-us-west-2.pooler.supabase.com:6543/postgres';
+    const expected =
+      'postgresql://postgres.projid:%40TestPass123%23@aws-0-us-west-2.pooler.supabase.com:6543/postgres';
+
+    assert.equal(sanitizeDatabaseUrl(rawWithSpecialChars), expected);
+    assert.equal(sanitizeDatabaseUrl(rawWithBrackets), expected);
+    assert.equal(sanitizeDatabaseUrl(expected), expected);
   });
 });
 
