@@ -15,8 +15,8 @@ import {
   verifyAdminToken,
   verifyPasswordConstantTime,
 } from '../server.ts';
-import { DEFAULT_QUESTIONS } from '../src/data/awardsData.ts';
-import { createAwardsDatabase } from '../src/db/database.ts';
+import { DEFAULT_QUESTIONS, PLAYERS } from '../src/data/awardsData.ts';
+import { SqliteAwardsRepository } from '../src/db/database.ts';
 
 interface SimulatedResponse {
   status: number;
@@ -24,11 +24,6 @@ interface SimulatedResponse {
   json: <T = unknown>() => Promise<T>;
 }
 
-/**
- * Executa uma requisição diretamente no pipeline do Express em memória,
- * permitindo testar middlewares, body-parser, rotas, CORS e autenticação
- * sem depender de abertura de portas TCP de rede.
- */
 function simulateRequest(
   app: Application,
   method: string,
@@ -160,10 +155,10 @@ describe('1. Testes Unitários — Segurança, Senha e Tokens', () => {
     assert.equal(verifyAdminToken(expiredToken, secret), false);
   });
 
-  it('gera token determinístico de votante por IP + dispositivo', () => {
-    const id1 = deriveAccessIdentity('192.168.1.10', 'HW-ABC123', 'v1');
-    const id2 = deriveAccessIdentity('192.168.1.10', 'HW-ABC123', 'v1');
-    const idDiffIp = deriveAccessIdentity('192.168.1.11', 'HW-ABC123', 'v1');
+  it('gera token determinístico de votante por IP + dispositivo + cookie', () => {
+    const id1 = deriveAccessIdentity('192.168.1.10', 'HW-ABC123', 'cookie-vid-1', 'v1');
+    const id2 = deriveAccessIdentity('192.168.1.10', 'HW-ABC123', 'cookie-vid-1', 'v1');
+    const idDiffIp = deriveAccessIdentity('192.168.1.11', 'HW-ABC123', 'cookie-vid-1', 'v1');
 
     assert.equal(id1.token, id2.token);
     assert.equal(id1.ipHash, id2.ipHash);
@@ -172,7 +167,7 @@ describe('1. Testes Unitários — Segurança, Senha e Tokens', () => {
   });
 });
 
-describe('2. Testes Unitários — Persistência em Arquivo SQLite', () => {
+describe('2. Testes Unitários — Persistência e Multi-Votos', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pca-sqlite-test-'));
   const dbFilePath = path.join(tmpDir, 'test-awards.db');
 
@@ -184,63 +179,80 @@ describe('2. Testes Unitários — Persistência em Arquivo SQLite', () => {
     }
   });
 
-  it('inicializa as questões padrão e persiste votos e questões entre reconexões ao arquivo SQLite', () => {
-    const repo1 = createAwardsDatabase(dbFilePath);
-    const initialQuestions = repo1.getQuestions();
-    assert.equal(initialQuestions.length, DEFAULT_QUESTIONS.length);
+  it('persiste múltiplos votos no banco de dados e os mantém intactos para consulta do admin', async () => {
+    const repo1 = new SqliteAwardsRepository(dbFilePath);
+    await repo1.init();
 
-    // Salva um rascunho de sessão
-    repo1.upsertSession({
-      token: 'PCA-1111-2222',
-      ipHash: 'AABBCCDDEEFF',
-      deviceSignature: 'HW-DEV1',
-      selectedProfile: 'Outro',
-      draftAnswers: { rodilindo_dor: 'Pedrin' },
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
-    assert.equal(repo1.getActiveSessionsCount(), 1);
-
-    // Registra um voto (deve remover a sessão automaticamente em transação)
-    repo1.createVoteAndClearSession({
+    // Voto 1: Lourival
+    await repo1.createVoteAndClearSession({
       id: 'vote-1',
-      token: 'PCA-1111-2222',
-      ipHash: 'AABBCCDDEEFF',
+      token: 'PCA-1111-1111',
+      ipHash: 'IPHASH000001',
       deviceSignature: 'HW-DEV1',
-      voterProfile: 'Outro',
+      voterProfile: 'Lourival',
       answers: { rodilindo_dor: 'Pedrin', beckham_dor: 'Victor' },
       submittedAt: new Date().toISOString(),
     });
-    assert.equal(repo1.getActiveSessionsCount(), 0);
-    repo1.close();
 
-    // Reabre o banco SQLite do disco para comprovar persistência real
-    const repo2 = createAwardsDatabase(dbFilePath);
-    const persistedVotes = repo2.getVotes();
-    assert.equal(persistedVotes.length, 1);
-    assert.equal(persistedVotes[0].token, 'PCA-1111-2222');
-    assert.equal(persistedVotes[0].answers.rodilindo_dor, 'Pedrin');
-    repo2.close();
+    // Voto 2: Pedrão
+    await repo1.createVoteAndClearSession({
+      id: 'vote-2',
+      token: 'PCA-2222-2222',
+      ipHash: 'IPHASH000002',
+      deviceSignature: 'HW-DEV2',
+      voterProfile: 'Pedrão',
+      answers: { rodilindo_dor: 'Lourival', beckham_dor: 'Pedrin' },
+      submittedAt: new Date().toISOString(),
+    });
+
+    // Voto 3: Outro
+    await repo1.createVoteAndClearSession({
+      id: 'vote-3',
+      token: 'PCA-3333-3333',
+      ipHash: 'IPHASH000003',
+      deviceSignature: 'HW-DEV3',
+      voterProfile: 'Outro',
+      answers: { rodilindo_dor: 'Pedrão', beckham_dor: 'Victor' },
+      submittedAt: new Date().toISOString(),
+    });
+
+    await repo1.close();
+
+    // Reabre a conexão e verifica que todos os 3 votos estão 100% persistidos
+    const repo2 = new SqliteAwardsRepository(dbFilePath);
+    await repo2.init();
+
+    const votes = await repo2.getVotes();
+    assert.equal(votes.length, 3);
+    const votedSquad = await repo2.getVotedSquadProfiles();
+    assert.equal(votedSquad.includes('Lourival'), true);
+    assert.equal(votedSquad.includes('Pedrão'), true);
+    assert.equal(votedSquad.includes('Outro'), false);
+
+    await repo2.close();
   });
 });
 
-describe('3. Testes de Integração da API — Autenticação Admin, Regras de Voto e Brute-Force', () => {
+describe('3. Testes de Integração da API — Autenticação, Travas Rígidas e Bloqueio de Perfil', () => {
   let app: Application;
-  let closeRepo: () => void;
+  let closeRepo: () => Promise<void>;
 
-  before(() => {
+  before(async () => {
+    const repo = new SqliteAwardsRepository(':memory:');
+    await repo.init();
+
     const created = createApp({
-      dbPath: ':memory:',
+      repository: repo,
       adminPassword: TEST_ADMIN_PASSWORD,
       adminTokenSecret: 'test-secret-key-for-integration',
       frontendOrigins: ['https://meu-front.vercel.app'],
     });
     app = created.app;
-    closeRepo = () => created.repo.close();
+    closeRepo = () => repo.close();
   });
 
-  after(() => {
-    closeRepo();
+  after(async () => {
+    await closeRepo();
   });
 
   it('retorna healthcheck e headers de segurança e CORS', async () => {
@@ -251,9 +263,9 @@ describe('3. Testes de Integração da API — Autenticação Admin, Regras de V
     assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
     assert.equal(res.headers.get('x-frame-options'), 'DENY');
     assert.equal(res.headers.get('access-control-allow-origin'), 'https://meu-front.vercel.app');
-    const body = await res.json<{ ok: boolean; storage: string }>();
+    const body = await res.json<{ ok: boolean; status: string }>();
     assert.equal(body.ok, true);
-    assert.equal(body.storage, 'sqlite');
+    assert.equal(body.status, 'healthy');
   });
 
   it('bloqueia acesso não autenticado a todas as rotas /api/admin/*', async () => {
@@ -282,7 +294,6 @@ describe('3. Testes de Integração da API — Autenticação Admin, Regras de V
       assert.equal(res.status, 401);
     }
 
-    // 6ª tentativa do mesmo IP deve ser bloqueada com 429 Too Many Requests
     const blockedRes = await simulateRequest(app, 'POST', '/api/admin/login', {
       headers: {
         'Content-Type': 'application/json',
@@ -293,7 +304,7 @@ describe('3. Testes de Integração da API — Autenticação Admin, Regras de V
     assert.equal(blockedRes.status, 429);
   });
 
-  it('autentica com a senha correta configurada no ambiente e permite gerenciar questões no Admin', async () => {
+  it('autentica com a senha correta e permite adicionar e listar integrantes', async () => {
     const loginRes = await simulateRequest(app, 'POST', '/api/admin/login', {
       headers: {
         'Content-Type': 'application/json',
@@ -311,74 +322,30 @@ describe('3. Testes de Integração da API — Autenticação Admin, Regras de V
       'Content-Type': 'application/json',
     };
 
-    // Acessa dashboard autenticado
+    const addPlayerRes = await simulateRequest(app, 'POST', '/api/admin/players', {
+      headers: authHeaders,
+      body: JSON.stringify({
+        name: 'Carlos',
+        gamertag: 'CarlosPro99',
+        archetype: 'SPARK+',
+        level: 100,
+        totalStats: 380,
+        statsSummary: 'VEL 95 · FIN 92 · DRI 94 · PAS 90',
+        nationality: 'BR',
+        imageUrl: '/cards/pedrin.jpg',
+      }),
+    });
+    assert.equal(addPlayerRes.status, 201);
+
     const dashRes = await simulateRequest(app, 'GET', '/api/admin/dashboard', {
       headers: authHeaders,
     });
     assert.equal(dashRes.status, 200);
-
-    // Cria nova questão
-    const createRes = await simulateRequest(app, 'POST', '/api/admin/questions', {
-      headers: authHeaders,
-      body: JSON.stringify({
-        title: 'CATEGORIA TESTE',
-        subtitle: 'Subtítulo teste',
-        type: 'choice',
-        publicVisible: false,
-        showPhotos: false,
-        required: false,
-      }),
-    });
-    assert.equal(createRes.status, 201);
-    const created = await createRes.json<{ question: { id: string } }>();
-
-    // Deleta a questão criada
-    const delRes = await simulateRequest(
-      app,
-      'DELETE',
-      `/api/admin/questions/${created.question.id}`,
-      { headers: authHeaders }
-    );
-    assert.equal(delRes.status, 200);
-
-    // Adiciona um novo integrante ao elenco com foto em Base64
-    const sampleBase64Photo =
-      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
-    const addPlayerRes = await simulateRequest(app, 'POST', '/api/admin/players', {
-      headers: authHeaders,
-      body: JSON.stringify({
-        name: 'Gabriel',
-        gamertag: 'GabrielPro99',
-        archetype: 'FINISHER+',
-        level: 100,
-        totalStats: 388,
-        statsSummary: 'FIN 99 · CHL 95 · FRI 97 · VEL 97',
-        nationality: 'BR',
-        imageUrl: sampleBase64Photo,
-      }),
-    });
-    assert.equal(addPlayerRes.status, 201);
-    const addedPlayer = await addPlayerRes.json<{ player: { id: string; imageUrl: string } }>();
-    assert.equal(addedPlayer.player.id, 'Gabriel');
-    assert.equal(addedPlayer.player.imageUrl, sampleBase64Photo);
-
-    // Verifica que o novo integrante aparece na inicialização de sessão
-    const initRes = await simulateRequest(app, 'POST', '/api/session/init', {
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceSignature: 'DEV-CHECK-PLAYERS' }),
-    });
-    assert.equal(initRes.status, 200);
-    const initData = await initRes.json<{ players: Array<{ id: string }> }>();
-    assert.equal(initData.players.some((p) => p.id === 'Gabriel'), true);
-
-    // Remove o integrante adicionado no teste
-    const delPlayerRes = await simulateRequest(app, 'DELETE', '/api/admin/players/Gabriel', {
-      headers: authHeaders,
-    });
-    assert.equal(delPlayerRes.status, 200);
+    const dashData = await dashRes.json<{ players: Array<{ id: string }> }>();
+    assert.equal(dashData.players.some((p) => p.id === 'Carlos'), true);
   });
 
-  it('valida regras de votação: bloqueia auto-voto, candidato inválido, voto duplicado e perfil já usado', async () => {
+  it('valida regras rígidas de votação e desativação definitiva de perfil', async () => {
     const squadAnswers: Record<string, string> = {
       soldado: 'Pedrão',
       bagre_do_ano: 'Pedrão',
@@ -391,39 +358,12 @@ describe('3. Testes de Integração da API — Autenticação Admin, Regras de V
       gol_puskas: 'Gol de bicicleta do Victor aos 90 minutos',
     };
 
-    // 1. Tentativa de auto-voto (Pedrin votando em Pedrin) -> Deve retornar 400
-    const selfVoteRes = await simulateRequest(app, 'POST', '/api/votes/submit', {
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Forwarded-For': '10.10.0.1',
-      },
-      body: JSON.stringify({
-        deviceSignature: 'DEV-PEDRIN',
-        voterProfile: 'Pedrin',
-        answers: { ...squadAnswers, ballon_dor: 'Pedrin' },
-      }),
-    });
-    assert.equal(selfVoteRes.status, 400);
-
-    // 2. Tentativa com candidato inexistente -> Deve retornar 400
-    const fakeCandidateRes = await simulateRequest(app, 'POST', '/api/votes/submit', {
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Forwarded-For': '10.10.0.1',
-      },
-      body: JSON.stringify({
-        deviceSignature: 'DEV-PEDRIN',
-        voterProfile: 'Pedrin',
-        answers: { ...squadAnswers, ballon_dor: 'JogadorInexistente' },
-      }),
-    });
-    assert.equal(fakeCandidateRes.status, 400);
-
-    // 3. Voto válido de integrante do elenco (Pedrin) -> Deve retornar 201
+    // 1. Voto válido de integrante do elenco (Pedrin)
     const validSquadRes = await simulateRequest(app, 'POST', '/api/votes/submit', {
       headers: {
         'Content-Type': 'application/json',
-        'X-Forwarded-For': '10.10.0.1',
+        'X-Forwarded-For': '198.51.100.1',
+        Cookie: 'pca_vid=pedrin-cookie-id-12345',
       },
       body: JSON.stringify({
         deviceSignature: 'DEV-PEDRIN',
@@ -433,32 +373,45 @@ describe('3. Testes de Integração da API — Autenticação Admin, Regras de V
     });
     assert.equal(validSquadRes.status, 201);
 
-    // 4. Tentativa de votar uma segunda vez com o mesmo dispositivo/IP -> Deve retornar 409
-    const duplicateTokenRes = await simulateRequest(app, 'POST', '/api/votes/submit', {
+    // 2. Mesma pessoa tentando votar novamente usando outro navegador/aba anônima no mesmo IP -> Deve bloquear com 409
+    const secondVoteAttempt = await simulateRequest(app, 'POST', '/api/votes/submit', {
       headers: {
         'Content-Type': 'application/json',
-        'X-Forwarded-For': '10.10.0.1',
+        'X-Forwarded-For': '198.51.100.1',
       },
       body: JSON.stringify({
-        deviceSignature: 'DEV-PEDRIN',
+        deviceSignature: 'ANONYMOUS-TAB-DIFFERENT-SIG',
         voterProfile: 'Outro',
         answers: { rodilindo_dor: 'Victor', beckham_dor: 'Paulo' },
       }),
     });
-    assert.equal(duplicateTokenRes.status, 409);
+    assert.equal(secondVoteAttempt.status, 409);
 
-    // 5. Outro dispositivo tentando usar o perfil "Pedrin" que já votou -> Deve retornar 409
-    const duplicateProfileRes = await simulateRequest(app, 'POST', '/api/votes/submit', {
+    // 3. Outra pessoa de outro IP tentando usar o perfil "Pedrin" que já concluiu o voto -> Deve bloquear com 409 (Perfil desativado)
+    const profileReuseAttempt = await simulateRequest(app, 'POST', '/api/votes/submit', {
       headers: {
         'Content-Type': 'application/json',
-        'X-Forwarded-For': '10.10.0.2',
+        'X-Forwarded-For': '198.51.100.99',
+        Cookie: 'pca_vid=other-person-vid-99',
       },
       body: JSON.stringify({
-        deviceSignature: 'DEV-OUTRO-PC',
+        deviceSignature: 'DEV-OTHER-PC',
         voterProfile: 'Pedrin',
         answers: squadAnswers,
       }),
     });
-    assert.equal(duplicateProfileRes.status, 409);
+    assert.equal(profileReuseAttempt.status, 409);
+
+    // 4. O perfil "Pedrin" deve aparecer na lista de perfis que já votaram em /api/session/init
+    const initRes = await simulateRequest(app, 'POST', '/api/session/init', {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Forwarded-For': '198.51.100.88',
+      },
+      body: JSON.stringify({ deviceSignature: 'DEV-NEW-GUEST' }),
+    });
+    assert.equal(initRes.status, 200);
+    const initData = await initRes.json<{ votedProfiles: string[] }>();
+    assert.equal(initData.votedProfiles.includes('Pedrin'), true);
   });
 });

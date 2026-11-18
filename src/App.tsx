@@ -665,59 +665,59 @@ export default function App() {
               </button>
             </div>
 
-            {/* Squad Participant Profiles */}
-            <div>
-              <h3 className="text-xs font-mono uppercase tracking-wider text-slate-400 mb-3">
-                Participantes do Elenco (Formulário Completo)
-              </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                {players.map((player) => {
-                  const hasAlreadyVoted = votedProfiles.includes(player.id);
+            {/* Squad Participant Profiles (Hidden when all squad members have already voted) */}
+            {players.filter((p) => !votedProfiles.includes(p.id)).length > 0 ? (
+              <div>
+                <h3 className="text-xs font-mono uppercase tracking-wider text-slate-400 mb-3">
+                  Participantes do Elenco (Formulário Completo)
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                  {players
+                    .filter((player) => !votedProfiles.includes(player.id))
+                    .map((player) => {
+                      return (
+                        <button
+                          key={player.id}
+                          type="button"
+                          onClick={() => handleSelectProfile(player.id)}
+                          className="min-h-[84px] p-3.5 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 bg-[#0B0F17] border-white/10 hover:border-amber-500/50 hover:bg-white/[0.03]"
+                        >
+                          <div className="flex items-center gap-3.5 min-w-0">
+                            <img
+                              src={player.imageUrl}
+                              alt={player.name}
+                              referrerPolicy="no-referrer"
+                              className="w-13 h-16 rounded-xl object-cover object-top bg-slate-900 border border-amber-500/30 shrink-0"
+                            />
+                            <div className="min-w-0">
+                              <span className="block font-display text-xl font-bold text-white truncate">
+                                {player.name}
+                              </span>
+                              <span className="block text-xs text-slate-400 font-mono tabular-nums truncate">
+                                {player.gamertag} <span aria-hidden="true">·</span> Nível {player.level}
+                              </span>
+                              <span className="block text-[11px] text-amber-400/90 font-mono mt-0.5">
+                                {player.archetype} · TOT {player.totalStats}
+                              </span>
+                            </div>
+                          </div>
 
-                  return (
-                    <button
-                      key={player.id}
-                      type="button"
-                      disabled={hasAlreadyVoted}
-                      onClick={() => handleSelectProfile(player.id)}
-                      className={`min-h-[84px] p-3.5 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 ${
-                        hasAlreadyVoted
-                          ? 'bg-[#0B0F17]/50 border-white/5 opacity-50 cursor-not-allowed'
-                          : 'bg-[#0B0F17] border-white/10 hover:border-amber-500/50 hover:bg-white/[0.03]'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3.5 min-w-0">
-                        <img
-                          src={player.imageUrl}
-                          alt={player.name}
-                          referrerPolicy="no-referrer"
-                          className="w-13 h-16 rounded-xl object-cover object-top bg-slate-900 border border-amber-500/30 shrink-0"
-                        />
-                        <div className="min-w-0">
-                          <span className="block font-display text-xl font-bold text-white truncate">
-                            {player.name}
-                          </span>
-                          <span className="block text-xs text-slate-400 font-mono tabular-nums truncate">
-                            {player.gamertag} <span aria-hidden="true">·</span> Nível {player.level}
-                          </span>
-                          <span className="block text-[11px] text-amber-400/90 font-mono mt-0.5">
-                            {hasAlreadyVoted
-                              ? 'Voto já registrado'
-                              : `${player.archetype} · TOT ${player.totalStats}`}
-                          </span>
-                        </div>
-                      </div>
-
-                      {hasAlreadyVoted ? (
-                        <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
-                      ) : (
-                        <ChevronRight className="w-5 h-5 text-slate-500 shrink-0" />
-                      )}
-                    </button>
-                  );
-                })}
+                          <ChevronRight className="w-5 h-5 text-slate-500 shrink-0" />
+                        </button>
+                      );
+                    })}
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="rounded-2xl bg-amber-500/10 border border-amber-500/30 p-4 text-center">
+                <p className="text-xs font-semibold text-amber-300">
+                  Todos os integrantes do elenco oficial já concluíram seus votos!
+                </p>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  A votação agora está aberta exclusivamente para o público através da opção "Outro" acima.
+                </p>
+              </div>
+            )}
           </section>
         )}
 
