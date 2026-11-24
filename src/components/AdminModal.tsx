@@ -17,6 +17,7 @@ import {
   Lock,
   LogOut,
   KeyRound,
+  Download,
 } from 'lucide-react';
 import {
   PLAYERS,
@@ -31,6 +32,7 @@ import {
   getStoredAdminToken,
   setStoredAdminToken,
 } from '../utils/api';
+import { downloadVotingPdfReport } from '../utils/pdfReport';
 
 interface DashboardData {
   questions: VotingQuestion[];
@@ -687,7 +689,25 @@ export const AdminModal: React.FC<AdminModalProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              type="button"
+              disabled={!data}
+              onClick={() => {
+                if (!data) return;
+                downloadVotingPdfReport(data, activePlayers);
+                setStatusMessage({
+                  type: 'success',
+                  text: 'Relatório oficial em PDF gerado e baixado com sucesso!',
+                });
+              }}
+              className="min-h-[44px] px-3.5 py-2 rounded-xl bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-40 text-xs font-bold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 shadow-md"
+              title="Baixar relatório completo da apuração em PDF"
+            >
+              <Download className="w-4 h-4" />
+              <span>Gerar Relatório PDF</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setConfirmClearVotes(true)}

@@ -17,6 +17,7 @@ import {
 } from '../server.ts';
 import { DEFAULT_QUESTIONS, PLAYERS } from '../src/data/awardsData.ts';
 import { sanitizeDatabaseUrl, SqliteAwardsRepository } from '../src/db/database.ts';
+import { buildVotingPdfBytes } from '../src/utils/pdfReport.ts';
 
 interface SimulatedResponse {
   status: number;
@@ -426,5 +427,32 @@ describe('3. Testes de Integração da API — Autenticação, Travas Rígidas e
     assert.equal(initRes.status, 200);
     const initData = await initRes.json<{ votedProfiles: string[] }>();
     assert.equal(initData.votedProfiles.includes('Pedrin'), true);
+  });
+
+  it('gera o relatório PDF válido (%PDF-1.4) com a apuração completa das votações do admin', async () => {
+    const loginRes = await simulateRequest(app, 'POST', '/api/admin/login', {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Forwarded-For': '10.0.0.50',
+      },
+      body: JSON.stringify({ password: TEST_ADMIN_PASSWORD }),
+    });
+    const { token } = await loginRes.json<{ token: string }>();
+
+    const dashRes = await simulateRequest(app, 'GET', '/api/admin/dashboard', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(dashRes.status, 200);
+    const dashData = await dashRes.json<Parameters<typeof buildVotingPdfBytes>[0]>();
+
+    const pdfBytes = buildVotingPdfBytes(dashData, dashData.players || PLAYERS);
+    assert.ok(pdfBytes instanceof Uint8Array);
+    assert.ok(pdfBytes.byteLength > 1000);
+
+    const pdfContent = Buffer.from(pdfBytes).toString('latin1');
+    assert.equal(pdfContent.startsWith('%PDF-1.4\n'), true);
+    assert.equal(pdfContent.includes('PRO CLUBS AWARDS'), true);
+    assert.equal(pdfContent.includes('BALLON D\'OR'), true);
+    assert.equal(pdfContent.trim().endsWith('%%EOF'), true);
   });
 });
